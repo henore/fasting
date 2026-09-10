@@ -13,6 +13,7 @@ import {
   Modal,
   TextInput,
   Image,
+  NativeModules,
   type AppStateStatus,
 } from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
@@ -30,27 +31,32 @@ import {
   updateFastRecord,
   deleteFastRecord,
   type FastRecord,
-  getNotifEnabled,
-  setNotifEnabled,
+  getGoalAlertEnabled,
+  setGoalAlertEnabled,
+  getGoalStrong,
+  setGoalStrong,
+  getReminderConfig,
+  setReminderConfig,
+  type ReminderConfig,
   getProExpiresAt,
-  unlockProByAd,
+  startProTrial,
   getProPermanent,
   setProPermanent,
-  getAdWatched,
-  getCustomNotifHours,
-  setCustomNotifHours,
-  getCustomNotifHours2,
-  setCustomNotifHours2,
-  getCustomNotifHours3,
-  setCustomNotifHours3,
+  getStrongAlertSound,
+  setStrongAlertSound,
+  getOverlaySeen,
+  setOverlaySeen,
 } from './storage';
 import {
-  scheduleFastCompleted,
-  cancelFastCompleted,
-  scheduleCustomReminder,
-  cancelCustomReminder,
+  rescheduleAll,
+  cancelAll,
+  cancelAllDisplayed,
 } from './notifications';
+
+const {RingtonePicker, WidgetDataModule} = NativeModules;
 import PrivacyPolicyScreen from './screens/PrivacyPolicyScreen';
+import {initIAP, endIAP, buyPro, listenToPurchases} from './purchase';
+import {styles} from './styles';
 
 const PHASES = [
   {hours: 12, label: 'Glycogen Depletion'},
@@ -151,27 +157,16 @@ export default function TimerScreen() {
   const [completedFasts, setCompletedFastsState] = useState(0);
   const [now, setNow] = useState(Date.now());
   const [loaded, setLoaded] = useState(false);
-  const [notifEnabled, setNotifEnabledState] = useState(true);
   const [tab, setTab] = useState<Tab>('timer');
   const [history, setHistory] = useState<FastRecord[]>([]);
   const [selectedBar, setSelectedBar] = useState<number | null>(null);
   const [proExpiresAt, setProExpiresAt] = useState(0);
   const [proPermanent, setProPermanentState] = useState(false);
-  const [adWatched, setAdWatched] = useState(false);
   const [mealModalVisible, setMealModalVisible] = useState(false);
-  const [customNotifHours, setCustomNotifHoursState] = useState<number | null>(
-    null,
-  );
-  const [customNotifHours2, setCustomNotifHoursState2] = useState<number | null>(null);
-  const [customNotifHours3, setCustomNotifHoursState3] = useState<number | null>(null);
+  const [congratsMessage, setCongratsMessage] = useState<string | null>(null);
+  const [overlayVisible, setOverlayVisible] = useState<Record<Tab, boolean>>({timer: false, history: false, stats: false, settings: false});
   const [customGoalHH, setCustomGoalHH] = useState('');
   const [customGoalMM, setCustomGoalMM] = useState('');
-  const [customNotifHH, setCustomNotifHH] = useState('');
-  const [customNotifMM, setCustomNotifMM] = useState('');
-  const [customNotifHH2, setCustomNotifHH2] = useState('');
-  const [customNotifMM2, setCustomNotifMM2] = useState('');
-  const [customNotifHH3, setCustomNotifHH3] = useState('');
-  const [customNotifMM3, setCustomNotifMM3] = useState('');
   const [selectedHistoryIdx, setSelectedHistoryIdx] = useState<number | null>(null);
   const [editModalVisible, setEditModalVisible] = useState(false);
   const [editStartStr, setEditStartStr] = useState('');
@@ -179,60 +174,115 @@ export default function TimerScreen() {
   const [mealNote, setMealNote] = useState('');
   const [mealPhotoUri, setMealPhotoUri] = useState<string | null>(null);
   const [showPrivacy, setShowPrivacy] = useState(false);
+  const [showProExpired, setShowProExpired] = useState(false);
+  const [goalAlertEnabled, setGoalAlertEnabledState] = useState(true);
+  const [goalStrong, setGoalStrongState] = useState(false);
+  const [rem1, setRem1] = useState<ReminderConfig>({enabled: false, offsetMinutes: 0, strong: false});
+  const [rem2, setRem2] = useState<ReminderConfig>({enabled: false, offsetMinutes: 0, strong: false});
+  const [rem3, setRem3] = useState<ReminderConfig>({enabled: false, offsetMinutes: 0, strong: false});
+  const [rem1HH, setRem1HH] = useState('');
+  const [rem1MM, setRem1MM] = useState('');
+  const [rem2HH, setRem2HH] = useState('');
+  const [rem2MM, setRem2MM] = useState('');
+  const [rem3HH, setRem3HH] = useState('');
+  const [rem3MM, setRem3MM] = useState('');
+  const [strongSoundUri, setStrongSoundUri] = useState<string | null>(null);
+  const [strongSoundName, setStrongSoundName] = useState<string | null>(null);
   const intervalRef = useRef<ReturnType<typeof setInterval> | null>(null);
 
   useEffect(() => {
     (async () => {
-      const [meal, best, goal, completed, notif, proExp, proPerm, custNotif, custNotif2, custNotif3, watched] =
+      const [meal, best, goal, completed, gaEnabled, proExp, proPerm, r1, r2, r3, gaStrong, sound] =
         await Promise.all([
           getLastMealTimestamp(),
           getBestFastMinutes(),
           getGoalHours(),
           getCompletedFasts(),
-          getNotifEnabled(),
+          getGoalAlertEnabled(),
           getProExpiresAt(),
           getProPermanent(),
-          getCustomNotifHours(),
-          getCustomNotifHours2(),
-          getCustomNotifHours3(),
-          getAdWatched(),
+          getReminderConfig(1),
+          getReminderConfig(2),
+          getReminderConfig(3),
+          getGoalStrong(),
+          getStrongAlertSound(),
         ]);
       if (meal !== null) {
         setLastMeal(meal);
+        WidgetDataModule.update(meal, goal);
       } else {
         const ts = Date.now();
         await setLastMealTimestamp(ts);
         setLastMeal(ts);
+        WidgetDataModule.update(ts, goal);
       }
       setBestMinutes(best);
       setGoalHoursState(goal);
       setCompletedFastsState(completed);
-      setNotifEnabledState(notif);
+      setGoalAlertEnabledState(gaEnabled);
       setProExpiresAt(proExp);
       setProPermanentState(proPerm);
-      setAdWatched(watched);
-      setCustomNotifHoursState(custNotif);
-      setCustomNotifHoursState2(custNotif2);
-      setCustomNotifHoursState3(custNotif3);
+      setRem1(r1);
+      setRem2(r2);
+      setRem3(r3);
+      setGoalStrongState(gaStrong);
+      if (sound) {
+        setStrongSoundUri(sound.uri);
+        setStrongSoundName(sound.name);
+      }
       if (![12, 14, 16, 18, 20, 24].includes(goal)) {
         setCustomGoalHH(String(Math.floor(goal)));
         setCustomGoalMM(String(Math.round((goal % 1) * 60)).padStart(2, '0'));
       }
-      if (custNotif !== null) {
-        setCustomNotifHH(String(Math.floor(custNotif)));
-        setCustomNotifMM(String(Math.round((custNotif % 1) * 60)).padStart(2, '0'));
-      }
-      if (custNotif2 !== null) {
-        setCustomNotifHH2(String(Math.floor(custNotif2)));
-        setCustomNotifMM2(String(Math.round((custNotif2 % 1) * 60)).padStart(2, '0'));
-      }
-      if (custNotif3 !== null) {
-        setCustomNotifHH3(String(Math.floor(custNotif3)));
-        setCustomNotifMM3(String(Math.round((custNotif3 % 1) * 60)).padStart(2, '0'));
-      }
+      const hhMM = (cfg: ReminderConfig, setHH: (v: string) => void, setMM: (v: string) => void) => {
+        if (cfg.enabled && cfg.offsetMinutes > 0) {
+          setHH(String(Math.floor(cfg.offsetMinutes / 60)));
+          setMM(String(cfg.offsetMinutes % 60).padStart(2, '0'));
+        }
+      };
+      hhMM(r1, setRem1HH, setRem1MM);
+      hhMM(r2, setRem2HH, setRem2MM);
+      hhMM(r3, setRem3HH, setRem3MM);
       setLoaded(true);
+
+      const timerSeen = await getOverlaySeen('timer');
+      if (!timerSeen) {
+        setOverlayVisible(prev => ({...prev, timer: true}));
+      }
+
+      try {
+        await initIAP();
+        listenToPurchases(async () => {
+          await setProPermanent();
+          setProPermanentState(true);
+        });
+      } catch {}
     })();
+    return () => {
+      endIAP();
+    };
   }, []);
+
+  useEffect(() => {
+    if (!loaded || lastMeal === null) return;
+    const isPro = proPermanent || proExpiresAt > Date.now();
+    rescheduleAll(lastMeal, goalHours, goalAlertEnabled, goalStrong, [rem1, rem2, rem3], isPro, strongSoundUri ?? undefined);
+    WidgetDataModule.updateNotifConfig(
+      goalAlertEnabled,
+      goalStrong,
+      rem1.enabled, rem1.offsetMinutes, rem1.strong,
+      rem2.enabled, rem2.offsetMinutes, rem2.strong,
+      rem3.enabled, rem3.offsetMinutes, rem3.strong,
+      strongSoundUri,
+    );
+  }, [loaded, lastMeal, goalHours, goalAlertEnabled, goalStrong, rem1, rem2, rem3, proPermanent, proExpiresAt, strongSoundUri]);
+
+  useEffect(() => {
+    if (!loaded || proPermanent) return;
+    if (proExpiresAt > 0 && proExpiresAt <= Date.now()) {
+      setShowProExpired(true);
+    }
+  }, [loaded, proPermanent, proExpiresAt, now]);
 
   useEffect(() => {
     if (mealModalVisible || editModalVisible) {
@@ -256,6 +306,7 @@ export default function TimerScreen() {
     const handler = (state: AppStateStatus) => {
       if (state === 'active') {
         setNow(Date.now());
+        cancelAllDisplayed();
       }
     };
     const sub = AppState.addEventListener('change', handler);
@@ -272,6 +323,12 @@ export default function TimerScreen() {
       loadHistory();
     }
     setSelectedHistoryIdx(null);
+    (async () => {
+      const seen = await getOverlaySeen(tab);
+      if (!seen) {
+        setOverlayVisible(prev => ({...prev, [tab]: true}));
+      }
+    })();
   }, [tab, loadHistory]);
 
   const handleLogMealOpen = useCallback(() => {
@@ -283,18 +340,32 @@ export default function TimerScreen() {
   const handleLogMealConfirm = useCallback(async () => {
     setMealModalVisible(false);
     const endTs = Date.now();
+
+    if (proExpiresAt === 0 && !proPermanent) {
+      const trialExpires = await startProTrial();
+      setProExpiresAt(trialExpires);
+    }
+
     if (lastMeal !== null) {
       const durationMinutes = Math.floor((endTs - lastMeal) / 60000);
+      let congrats: string | null = null;
 
       if (durationMinutes >= goalHours * 60) {
         const newCount = completedFasts + 1;
         setCompletedFastsState(newCount);
         await setCompletedFasts(newCount);
+        congrats = 'Goal reached!';
       }
 
       if (durationMinutes > bestMinutes) {
         setBestMinutes(durationMinutes);
         await setBestFastMinutes(durationMinutes);
+        congrats = congrats ? 'New best & goal reached!' : 'New personal best!';
+      }
+
+      if (congrats) {
+        setCongratsMessage(congrats);
+        setTimeout(() => setCongratsMessage(null), 4000);
       }
 
       const record: FastRecord = {
@@ -302,10 +373,10 @@ export default function TimerScreen() {
         endTimestampUtc: endTs,
         durationMinutes,
       };
-      if (proExpiresAt > Date.now() && mealNote.trim()) {
+      if ((proPermanent || proExpiresAt > Date.now()) && mealNote.trim()) {
         record.mealNote = mealNote.trim();
       }
-      if (proExpiresAt > Date.now() && mealPhotoUri) {
+      if ((proPermanent || proExpiresAt > Date.now()) && mealPhotoUri) {
         record.mealPhotoUri = mealPhotoUri;
       }
       await addFastRecord(record);
@@ -314,24 +385,10 @@ export default function TimerScreen() {
     await setLastMealTimestamp(endTs);
     setLastMeal(endTs);
     setNow(Date.now());
+    WidgetDataModule.update(endTs, goalHours);
 
-    await cancelFastCompleted();
-    await cancelCustomReminder();
-    if (notifEnabled) {
-      await scheduleFastCompleted(endTs, goalHours);
-    }
-    if (proExpiresAt > Date.now()) {
-      if (customNotifHours !== null) {
-        await scheduleCustomReminder(endTs, customNotifHours);
-      }
-      if (customNotifHours2 !== null) {
-        await scheduleCustomReminder(endTs, customNotifHours2);
-      }
-      if (customNotifHours3 !== null) {
-        await scheduleCustomReminder(endTs, customNotifHours3);
-      }
-    }
-  }, [lastMeal, bestMinutes, goalHours, completedFasts, notifEnabled, proExpiresAt, mealNote, mealPhotoUri, customNotifHours, customNotifHours2, customNotifHours3]);
+    await cancelAll();
+  }, [lastMeal, bestMinutes, goalHours, completedFasts, proExpiresAt, proPermanent, mealNote, mealPhotoUri]);
 
   const handlePickPhoto = useCallback(async () => {
     if (proExpiresAt <= Date.now()) {
@@ -346,41 +403,22 @@ export default function TimerScreen() {
   const handleGoalChange = useCallback(async (hours: number) => {
     setGoalHoursState(hours);
     await setGoalHours(hours);
-  }, []);
-
-  const handleNotifToggle = useCallback(async (val: boolean) => {
-    setNotifEnabledState(val);
-    await setNotifEnabled(val);
-    if (!val) {
-      await cancelFastCompleted();
-    }
-  }, []);
+    if (lastMeal !== null) WidgetDataModule.update(lastMeal, hours);
+  }, [lastMeal]);
 
   const handleUnlockPro = useCallback(() => {
-    const buttons: {text: string; style?: 'cancel' | 'destructive'; onPress?: () => void}[] = [
+    Alert.alert('Upgrade to Pro', '$2.99 — Lifetime access to all Pro features.', [
       {text: 'Cancel', style: 'cancel'},
-    ];
-    if (!adWatched) {
-      buttons.push({
-        text: 'Watch Ad (free for 24h)',
-        onPress: async () => {
-          const expires = await unlockProByAd();
-          setProExpiresAt(expires);
-          setAdWatched(true);
+      {
+        text: 'Buy $2.99',
+        onPress: () => {
+          buyPro();
         },
-      });
-    }
-    buttons.push({
-      text: 'Buy $1.99 (forever)',
-      onPress: async () => {
-        await setProPermanent();
-        setProPermanentState(true);
       },
-    });
-    Alert.alert('Upgrade to Pro', 'Choose an option:', buttons);
-  }, [adWatched]);
+    ]);
+  }, []);
 
-  const validateHHMM = (hh: string, mm: string): number | null => {
+  const validateGoalHHMM = (hh: string, mm: string): number | null => {
     const h = Number(hh) || 0;
     const m = Number(mm === '' ? '0' : mm);
     if (isNaN(m) || m > 59 || h < 12 || h > 99) return null;
@@ -388,60 +426,103 @@ export default function TimerScreen() {
   };
 
   const handleSetCustomGoal = useCallback(async () => {
-    const total = validateHHMM(customGoalHH, customGoalMM);
-    if (total === null) return;
+    const total = validateGoalHHMM(customGoalHH, customGoalMM);
+    if (total === null) {
+      Alert.alert('Invalid', 'Goal must be at least 12 hours.');
+      return;
+    }
     setGoalHoursState(total);
     await setGoalHours(total);
-  }, [customGoalHH, customGoalMM]);
+    if (lastMeal !== null) WidgetDataModule.update(lastMeal, total);
+  }, [customGoalHH, customGoalMM, lastMeal]);
 
   const handleClearCustomGoal = useCallback(async () => {
     setGoalHoursState(16);
     await setGoalHours(16);
+    if (lastMeal !== null) WidgetDataModule.update(lastMeal, 16);
     setCustomGoalHH('');
     setCustomGoalMM('');
+  }, [lastMeal]);
+
+  const handleGoalAlertToggle = useCallback(async (val: boolean) => {
+    setGoalAlertEnabledState(val);
+    await setGoalAlertEnabled(val);
   }, []);
 
-  const handleSetCustomNotif = useCallback(async () => {
-    const total = validateHHMM(customNotifHH, customNotifMM);
-    if (total === null) return;
-    setCustomNotifHoursState(total);
-    await setCustomNotifHours(total);
-  }, [customNotifHH, customNotifMM]);
-
-  const handleClearCustomNotif = useCallback(async () => {
-    setCustomNotifHoursState(null);
-    await setCustomNotifHours(null);
-    setCustomNotifHH('');
-    setCustomNotifMM('');
+  const checkStrongPermission = useCallback(async (): Promise<boolean> => {
+    const hasPermission = await RingtonePicker.hasExactAlarmPermission();
+    if (!hasPermission) {
+      Alert.alert(
+        'Permission Required',
+        'Strong Alerts need permission to schedule precise reminders.',
+        [
+          {text: 'Cancel', style: 'cancel'},
+          {text: 'Open Settings', onPress: () => RingtonePicker.openExactAlarmSettings()},
+        ],
+      );
+      return false;
+    }
+    return true;
   }, []);
 
-  const handleSetCustomNotif2 = useCallback(async () => {
-    const total = validateHHMM(customNotifHH2, customNotifMM2);
-    if (total === null) return;
-    setCustomNotifHoursState2(total);
-    await setCustomNotifHours2(total);
-  }, [customNotifHH2, customNotifMM2]);
+  const handleGoalStrongToggle = useCallback(async (val: boolean) => {
+    if (val && !(await checkStrongPermission())) return;
+    setGoalStrongState(val);
+    await setGoalStrong(val);
+  }, [checkStrongPermission]);
 
-  const handleClearCustomNotif2 = useCallback(async () => {
-    setCustomNotifHoursState2(null);
-    await setCustomNotifHours2(null);
-    setCustomNotifHH2('');
-    setCustomNotifMM2('');
+  const handleSetReminder = useCallback(async (n: 1 | 2 | 3, hh: string, mm: string) => {
+    const h = Number(hh) || 0;
+    const m = Number(mm === '' ? '0' : mm);
+    if (isNaN(m) || m > 59 || h > 99) {
+      Alert.alert('Invalid', 'Enter valid hours and minutes.');
+      return;
+    }
+    const totalMinutes = h * 60 + m;
+    if (totalMinutes === 0) {
+      Alert.alert('Invalid', 'Set a time greater than 00h 00m.');
+      return;
+    }
+    const goalMinutes = Math.floor(goalHours * 60);
+    if (totalMinutes >= goalMinutes) {
+      Alert.alert('Invalid', 'Reminder must be before the goal time.');
+      return;
+    }
+    const rems = [rem1, rem2, rem3];
+    const setters = [setRem1, setRem2, setRem3];
+    const newConfig: ReminderConfig = {...rems[n - 1], offsetMinutes: totalMinutes, enabled: true};
+    setters[n - 1](newConfig);
+    await setReminderConfig(n, newConfig);
+  }, [goalHours, rem1, rem2, rem3]);
+
+  const handleClearReminder = useCallback(async (n: 1 | 2 | 3) => {
+    const newConfig: ReminderConfig = {enabled: false, offsetMinutes: 0, strong: false};
+    const setters = [setRem1, setRem2, setRem3];
+    const hhSetters = [setRem1HH, setRem2HH, setRem3HH];
+    const mmSetters = [setRem1MM, setRem2MM, setRem3MM];
+    setters[n - 1](newConfig);
+    hhSetters[n - 1]('');
+    mmSetters[n - 1]('');
+    await setReminderConfig(n, newConfig);
   }, []);
 
-  const handleSetCustomNotif3 = useCallback(async () => {
-    const total = validateHHMM(customNotifHH3, customNotifMM3);
-    if (total === null) return;
-    setCustomNotifHoursState3(total);
-    await setCustomNotifHours3(total);
-  }, [customNotifHH3, customNotifMM3]);
+  const handleReminderStrongToggle = useCallback(async (n: 1 | 2 | 3, val: boolean) => {
+    if (val && !(await checkStrongPermission())) return;
+    const rems = [rem1, rem2, rem3];
+    const setters = [setRem1, setRem2, setRem3];
+    const newConfig: ReminderConfig = {...rems[n - 1], strong: val};
+    setters[n - 1](newConfig);
+    await setReminderConfig(n, newConfig);
+  }, [rem1, rem2, rem3, checkStrongPermission]);
 
-  const handleClearCustomNotif3 = useCallback(async () => {
-    setCustomNotifHoursState3(null);
-    await setCustomNotifHours3(null);
-    setCustomNotifHH3('');
-    setCustomNotifMM3('');
-  }, []);
+  const handlePickAlarmSound = useCallback(async () => {
+    const result = await RingtonePicker.pickAlarmSound(strongSoundUri);
+    if (result) {
+      setStrongSoundUri(result.uri);
+      setStrongSoundName(result.name);
+      await setStrongAlertSound(result.uri, result.name);
+    }
+  }, [strongSoundUri]);
 
   const handleEditOpen = useCallback(
     (idx: number) => {
@@ -511,6 +592,29 @@ export default function TimerScreen() {
     );
   }, [selectedHistoryIdx, loadHistory]);
 
+  const OVERLAY_TEXT: Record<Tab, string[]> = {
+    timer: [
+      'Your fast has already started.',
+      'Hold "Log Meal" when you eat.\nYour next fast starts automatically.',
+    ],
+    history: [
+      'See your daily fasting history here.',
+      'You can edit times if you forgot to log a meal.',
+    ],
+    stats: [
+      'See your longest fast for each day.',
+      'Tap a bar to view the details.',
+    ],
+    settings: [
+      'Choose your fasting goal and notification settings here.',
+    ],
+  };
+
+  const dismissOverlay = useCallback(async () => {
+    await setOverlaySeen(tab);
+    setOverlayVisible(prev => ({...prev, [tab]: false}));
+  }, [tab]);
+
   if (!loaded) {
     return (
       <View style={styles.container}>
@@ -526,6 +630,9 @@ export default function TimerScreen() {
 
   const renderTimer = () => (
     <>
+      {congratsMessage && (
+        <Text style={styles.congratsText}>{congratsMessage}</Text>
+      )}
       <View style={styles.topRow}>
         <View style={styles.topItem}>
           <Text style={styles.topLabel}>Goal</Text>
@@ -595,16 +702,18 @@ export default function TimerScreen() {
         <Text style={styles.buttonText}>Hold to log meal</Text>
       </Pressable>
 
-      {isPro ? (
+      {proPermanent ? (
         <View style={styles.adLink}>
-          <Text style={[styles.adLinkText, {color: '#4CAF50'}]}>Pro Active</Text>
+          <PulsingPhase text="Pro Active" />
+        </View>
+      ) : proExpiresAt > now ? (
+        <View style={styles.adLink}>
+          <PulsingPhase text="Pro Trial — 48 hours" />
         </View>
       ) : (
         <Pressable onPress={handleUnlockPro} style={styles.adLink}>
           <Text style={styles.adLinkText}>
-            {adWatched
-              ? 'Upgrade to Pro — $1.99 Lifetime'
-              : 'Try Pro free for 24 hours — first time only\nWatch one rewarded ad to start your trial.'}
+            Upgrade to Pro — $2.99 Lifetime
           </Text>
         </Pressable>
       )}
@@ -621,7 +730,7 @@ export default function TimerScreen() {
     return (
       <ScrollView
         style={styles.tabContent}
-        contentContainerStyle={!isPro ? {paddingBottom: 60} : undefined}
+        contentContainerStyle={undefined}
         showsVerticalScrollIndicator={false}>
         <Text style={styles.sectionTitle}>Fasting History</Text>
         {history.length === 0 ? (
@@ -753,8 +862,8 @@ export default function TimerScreen() {
     const days = isPro ? allDays : allDays.slice(-7);
     const hasHiddenDays = !isPro && allDays.length > 7;
 
-    const CHART_HEIGHT = 220;
-    const LABEL_AREA = 18;
+    const CHART_HEIGHT = 340;
+    const LABEL_AREA = 24;
     const TOTAL_HEIGHT = CHART_HEIGHT + LABEL_AREA;
     const MIN_HOURS = 12;
     const MAX_HOURS = 24;
@@ -762,7 +871,7 @@ export default function TimerScreen() {
     const MIN_MINUTES = MIN_HOURS * 60;
     const BAR_WIDTH = 42;
     const BAR_GAP = 4;
-    const Y_LABEL_WIDTH = 34;
+    const Y_LABEL_WIDTH = 36;
     const GUIDES = [12, 14, 16, 18, 20, 22, 24];
     const DAY_NAMES = ['Sun', 'Mon', 'Tue', 'Wed', 'Thu', 'Fri', 'Sat'];
 
@@ -777,7 +886,7 @@ export default function TimerScreen() {
     };
 
     return (
-      <View style={[styles.tabContent, !isPro && {paddingBottom: 60}]}>
+      <View style={styles.tabContent}>
         <Text style={styles.sectionTitle}>Stats</Text>
 
         <View style={styles.statsRow}>
@@ -813,7 +922,7 @@ export default function TimerScreen() {
                       7,
                     right: 4,
                     color: '#aaa',
-                    fontSize: 11,
+                    fontSize: 13,
                   }}>
                   {h}
                 </Text>
@@ -886,7 +995,7 @@ export default function TimerScreen() {
                       <Text
                         style={{
                           color: '#aaa',
-                          fontSize: 11,
+                          fontSize: 13,
                           marginTop: 3,
                         }}>
                         {label}
@@ -1013,145 +1122,110 @@ export default function TimerScreen() {
 
       <View style={styles.settingsDivider} />
 
-      <Text style={styles.settingsLabel}>Notifications</Text>
+      <Text style={styles.settingsLabel}>Goal Alert</Text>
       <View style={styles.settingsToggleRow}>
-        <Text style={styles.settingsInfoLabel}>Fast Completed</Text>
+        <Text style={styles.settingsInfoLabel}>Goal Reached</Text>
         <Switch
-          value={notifEnabled}
-          onValueChange={handleNotifToggle}
+          value={goalAlertEnabled}
+          onValueChange={handleGoalAlertToggle}
           trackColor={{false: '#333', true: '#2e7d32'}}
-          thumbColor={notifEnabled ? '#4CAF50' : '#666'}
+          thumbColor={goalAlertEnabled ? '#4CAF50' : '#666'}
         />
       </View>
+      {goalAlertEnabled && (
+        <View style={styles.settingsToggleRow}>
+          <Text style={[styles.settingsInfoLabel, !isPro && styles.proDisabledLabel]}>
+            Strong {!isPro && '(Pro)'}
+          </Text>
+          <Switch
+            value={goalStrong}
+            onValueChange={isPro ? (v) => handleGoalStrongToggle(v) : undefined}
+            disabled={!isPro}
+            trackColor={{false: '#333', true: '#2e7d32'}}
+            thumbColor={goalStrong ? '#4CAF50' : '#666'}
+          />
+        </View>
+      )}
 
-      <Text
-        style={[
-          styles.settingsLabel,
-          {marginTop: 16},
-          !isPro && styles.proDisabledLabel,
-        ]}>
-        Custom Reminder 1 {!isPro && '(Pro)'}
-      </Text>
-      <View style={styles.customInputRow}>
-        <TextInput
-          style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
-          placeholder="HH"
-          placeholderTextColor="#555"
-          value={customNotifHH}
-          onChangeText={t => setCustomNotifHH(t.replace(/[^0-9]/g, ''))}
-          editable={isPro}
-          keyboardType="numeric"
-          maxLength={2}
-        />
-        <Text style={styles.customHHMMLabel}>h</Text>
-        <TextInput
-          style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
-          placeholder="MM"
-          placeholderTextColor="#555"
-          value={customNotifMM}
-          onChangeText={t => setCustomNotifMM(t.replace(/[^0-9]/g, ''))}
-          editable={isPro}
-          keyboardType="numeric"
-          maxLength={2}
-        />
-        <Text style={styles.customHHMMLabel}>m</Text>
-        <Pressable
-          onPress={isPro ? handleSetCustomNotif : undefined}
-          style={[styles.customInputBtn, !isPro && styles.proDisabledInput]}>
-          <Text style={styles.customInputBtnText}>Set</Text>
-        </Pressable>
-        {customNotifHours !== null && (
-          <Pressable onPress={isPro ? handleClearCustomNotif : undefined} style={styles.customClearBtn}>
-            <Text style={styles.customClearBtnText}>✕</Text>
-          </Pressable>
-        )}
-      </View>
+      {([1, 2, 3] as const).map(n => {
+        const rem = [rem1, rem2, rem3][n - 1];
+        const hh = [rem1HH, rem2HH, rem3HH][n - 1];
+        const mm = [rem1MM, rem2MM, rem3MM][n - 1];
+        const setHH = [setRem1HH, setRem2HH, setRem3HH][n - 1];
+        const setMM = [setRem1MM, setRem2MM, setRem3MM][n - 1];
+        return (
+          <View key={n}>
+            <Text
+              style={[
+                styles.settingsLabel,
+                {marginTop: 16},
+                !isPro && styles.proDisabledLabel,
+              ]}>
+              Reminder {n} {!isPro && '(Pro)'}
+            </Text>
+            <View style={styles.customInputRow}>
+              <TextInput
+                style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
+                placeholder="HH"
+                placeholderTextColor="#555"
+                value={hh}
+                onChangeText={t => setHH(t.replace(/[^0-9]/g, ''))}
+                editable={isPro}
+                keyboardType="numeric"
+                maxLength={2}
+              />
+              <Text style={styles.customHHMMLabel}>h</Text>
+              <TextInput
+                style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
+                placeholder="MM"
+                placeholderTextColor="#555"
+                value={mm}
+                onChangeText={t => setMM(t.replace(/[^0-9]/g, ''))}
+                editable={isPro}
+                keyboardType="numeric"
+                maxLength={2}
+              />
+              <Text style={styles.customHHMMLabel}>m before goal</Text>
+              <Pressable
+                onPress={isPro ? () => handleSetReminder(n, hh, mm) : undefined}
+                style={[styles.customInputBtn, !isPro && styles.proDisabledInput]}>
+                <Text style={styles.customInputBtnText}>Set</Text>
+              </Pressable>
+              {rem.offsetMinutes > 0 && (
+                <Pressable onPress={isPro ? () => handleClearReminder(n) : undefined} style={styles.customClearBtn}>
+                  <Text style={styles.customClearBtnText}>✕</Text>
+                </Pressable>
+              )}
+            </View>
+            {rem.offsetMinutes > 0 && (
+              <View style={styles.settingsToggleRow}>
+                <Text style={[styles.settingsInfoLabel, !isPro && styles.proDisabledLabel]}>
+                  Strong
+                </Text>
+                <Switch
+                  value={rem.strong}
+                  onValueChange={isPro ? (v) => handleReminderStrongToggle(n, v) : undefined}
+                  disabled={!isPro}
+                  trackColor={{false: '#333', true: '#2e7d32'}}
+                  thumbColor={rem.strong ? '#4CAF50' : '#666'}
+                />
+              </View>
+            )}
+          </View>
+        );
+      })}
 
-      <Text
-        style={[
-          styles.settingsLabel,
-          {marginTop: 12},
-          !isPro && styles.proDisabledLabel,
-        ]}>
-        Custom Reminder 2 {!isPro && '(Pro)'}
-      </Text>
-      <View style={styles.customInputRow}>
-        <TextInput
-          style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
-          placeholder="HH"
-          placeholderTextColor="#555"
-          value={customNotifHH2}
-          onChangeText={t => setCustomNotifHH2(t.replace(/[^0-9]/g, ''))}
-          editable={isPro}
-          keyboardType="numeric"
-          maxLength={2}
-        />
-        <Text style={styles.customHHMMLabel}>h</Text>
-        <TextInput
-          style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
-          placeholder="MM"
-          placeholderTextColor="#555"
-          value={customNotifMM2}
-          onChangeText={t => setCustomNotifMM2(t.replace(/[^0-9]/g, ''))}
-          editable={isPro}
-          keyboardType="numeric"
-          maxLength={2}
-        />
-        <Text style={styles.customHHMMLabel}>m</Text>
-        <Pressable
-          onPress={isPro ? handleSetCustomNotif2 : undefined}
-          style={[styles.customInputBtn, !isPro && styles.proDisabledInput]}>
-          <Text style={styles.customInputBtnText}>Set</Text>
-        </Pressable>
-        {customNotifHours2 !== null && (
-          <Pressable onPress={isPro ? handleClearCustomNotif2 : undefined} style={styles.customClearBtn}>
-            <Text style={styles.customClearBtnText}>✕</Text>
+      {isPro && (goalStrong || rem1.strong || rem2.strong || rem3.strong) && (
+        <>
+          <Text style={[styles.settingsLabel, {marginTop: 16}]}>Alarm Sound</Text>
+          <Pressable onPress={handlePickAlarmSound} style={styles.settingsRow}>
+            <Text style={styles.settingsRowText}>Sound</Text>
+            <Text style={{color: '#aaa', fontSize: 14}}>
+              {strongSoundName ?? 'Default alarm'}
+            </Text>
           </Pressable>
-        )}
-      </View>
-
-      <Text
-        style={[
-          styles.settingsLabel,
-          {marginTop: 12},
-          !isPro && styles.proDisabledLabel,
-        ]}>
-        Custom Reminder 3 {!isPro && '(Pro)'}
-      </Text>
-      <View style={styles.customInputRow}>
-        <TextInput
-          style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
-          placeholder="HH"
-          placeholderTextColor="#555"
-          value={customNotifHH3}
-          onChangeText={t => setCustomNotifHH3(t.replace(/[^0-9]/g, ''))}
-          editable={isPro}
-          keyboardType="numeric"
-          maxLength={2}
-        />
-        <Text style={styles.customHHMMLabel}>h</Text>
-        <TextInput
-          style={[styles.customHHMMInput, !isPro && styles.proDisabledInput]}
-          placeholder="MM"
-          placeholderTextColor="#555"
-          value={customNotifMM3}
-          onChangeText={t => setCustomNotifMM3(t.replace(/[^0-9]/g, ''))}
-          editable={isPro}
-          keyboardType="numeric"
-          maxLength={2}
-        />
-        <Text style={styles.customHHMMLabel}>m</Text>
-        <Pressable
-          onPress={isPro ? handleSetCustomNotif3 : undefined}
-          style={[styles.customInputBtn, !isPro && styles.proDisabledInput]}>
-          <Text style={styles.customInputBtnText}>Set</Text>
-        </Pressable>
-        {customNotifHours3 !== null && (
-          <Pressable onPress={isPro ? handleClearCustomNotif3 : undefined} style={styles.customClearBtn}>
-            <Text style={styles.customClearBtnText}>✕</Text>
-          </Pressable>
-        )}
-      </View>
+        </>
+      )}
 
       <View style={styles.settingsDivider} />
 
@@ -1170,6 +1244,28 @@ export default function TimerScreen() {
           <Text style={styles.settingsRowArrow}>›</Text>
         </Pressable>
       )}
+
+      <Pressable
+        style={styles.settingsRow}
+        onPress={() => {
+          Alert.alert(
+            'Battery Settings',
+            'If notifications or alarms are not arriving, go to your device Settings > Apps > Fast > Battery and set it to "Unrestricted".\n\nThis prevents the system from blocking scheduled alerts while the screen is off.',
+            [
+              {text: 'Close', style: 'cancel'},
+              {
+                text: 'Open Settings',
+                onPress: () => {
+                  const {Linking} = require('react-native');
+                  Linking.openSettings();
+                },
+              },
+            ],
+          );
+        }}>
+        <Text style={styles.settingsRowText}>Battery Settings</Text>
+        <Text style={styles.settingsRowArrow}>›</Text>
+      </Pressable>
 
       <Pressable
         style={styles.settingsRow}
@@ -1193,21 +1289,20 @@ export default function TimerScreen() {
         <View style={styles.comparisonColumn}>
           <Text style={styles.comparisonHeader}>Free</Text>
           <Text style={styles.comparisonItem}>Timer</Text>
-          <Text style={styles.comparisonItem}>Basic Notifications</Text>
+          <Text style={styles.comparisonItem}>Goal Alert</Text>
           <Text style={styles.comparisonItem}>7 Days History</Text>
           <Text style={styles.comparisonItem}>7 Days Stats</Text>
           <Text style={styles.comparisonItem}>Edit History</Text>
-          <Text style={styles.comparisonItem}>Ads</Text>
         </View>
         <View style={styles.comparisonColumn}>
           <Text style={styles.comparisonHeaderPro}>Pro</Text>
-          <Text style={styles.comparisonItemPro}>No Ads</Text>
           <Text style={styles.comparisonItemPro}>Meal Notes</Text>
           <Text style={styles.comparisonItemPro}>Meal Photos</Text>
           <Text style={styles.comparisonItemPro}>Unlimited History</Text>
           <Text style={styles.comparisonItemPro}>Unlimited Stats</Text>
           <Text style={styles.comparisonItemPro}>Flexible Goals</Text>
-          <Text style={styles.comparisonItemPro}>Advanced Notifications</Text>
+          <Text style={styles.comparisonItemPro}>Custom Reminders</Text>
+          <Text style={styles.comparisonItemPro}>Strong Alerts</Text>
         </View>
       </View>
 
@@ -1244,7 +1339,51 @@ export default function TimerScreen() {
         {tab === 'settings' && renderSettings()}
       </View>
 
-      {!isPro && <View style={styles.adSpace} />}
+      {showProExpired && (
+        <Pressable
+          style={[styles.tutorialOverlay, styles.tutorialOverlayLight]}
+          onPress={() => setShowProExpired(false)}>
+          <View style={[styles.tutorialBox, styles.tutorialBoxBordered]}>
+            <Text style={[styles.tutorialText, styles.tutorialTextFirst]}>
+              Pro Trial Ended
+            </Text>
+            <Text style={styles.tutorialText}>
+              Your 48-hour Pro trial has expired.
+            </Text>
+            <Text style={styles.tutorialText}>
+              You can upgrade anytime from Settings.
+            </Text>
+            <Text style={styles.tutorialDismiss}>Tap to dismiss</Text>
+          </View>
+        </Pressable>
+      )}
+
+      {overlayVisible[tab] && (
+        <Pressable
+          style={[
+            styles.tutorialOverlay,
+            (tab === 'timer' || tab === 'settings') && styles.tutorialOverlayLight,
+          ]}
+          onPress={dismissOverlay}>
+          <View style={[
+            styles.tutorialBox,
+            (tab === 'timer' || tab === 'settings') && styles.tutorialBoxBordered,
+          ]}>
+            {OVERLAY_TEXT[tab].map((line, i) => (
+              <Text key={i} style={[styles.tutorialText, i === 0 && styles.tutorialTextFirst]}>
+                {line}
+              </Text>
+            ))}
+            <Text style={styles.tutorialDismiss}>Tap to dismiss</Text>
+          </View>
+        </Pressable>
+      )}
+
+      {overlayVisible.timer && tab === 'timer' && (
+        <View style={styles.menuIndicator}>
+          <Text style={styles.menuIndicatorText}>↓ Menu ↓</Text>
+        </View>
+      )}
 
       <View style={styles.tabBar}>
         {TABS.map(t => (
@@ -1386,561 +1525,3 @@ export default function TimerScreen() {
   );
 }
 
-const styles = StyleSheet.create({
-  container: {
-    flex: 1,
-    backgroundColor: '#000',
-  },
-  body: {
-    flex: 1,
-    paddingHorizontal: 24,
-    paddingTop: 60,
-  },
-  loading: {
-    color: '#555',
-    textAlign: 'center',
-    marginTop: 100,
-  },
-  topRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-  },
-  topItem: {
-    alignItems: 'center',
-  },
-  topLabel: {
-    color: '#ccc',
-    fontSize: 14,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  topValue: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '600',
-    marginTop: 2,
-  },
-  timerSection: {
-    alignItems: 'center',
-    marginTop: 30,
-  },
-  timerRow: {
-    flexDirection: 'row',
-    alignItems: 'baseline',
-  },
-  timer: {
-    color: '#fff',
-    fontSize: 72,
-    fontWeight: '200',
-    fontVariant: ['tabular-nums'],
-  },
-  timerUnit: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '200',
-    marginHorizontal: 4,
-    marginBottom: 2,
-  },
-  phase: {
-    color: '#FF9800',
-    fontSize: 22,
-    fontWeight: '600',
-    marginTop: 8,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-  },
-  milestones: {
-    marginTop: 20,
-    marginBottom: 20,
-    gap: 8,
-  },
-  milestoneRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 12,
-  },
-  milestoneHours: {
-    color: '#bbb',
-    fontSize: 15,
-    fontWeight: '600',
-    width: 36,
-    textAlign: 'right',
-  },
-  milestoneLabel: {
-    color: '#bbb',
-    fontSize: 15,
-  },
-  milestoneActive: {
-    color: '#FF9800',
-    fontWeight: '700',
-  },
-  milestoneFireIcon: {
-    fontSize: 16,
-  },
-  milestoneReached: {
-    color: '#4CAF50',
-  },
-  button: {
-    borderWidth: 1,
-    borderColor: '#444',
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 4,
-    marginBottom: 10,
-  },
-  buttonPressed: {
-    backgroundColor: '#111',
-    borderColor: '#666',
-  },
-  buttonText: {
-    color: '#ddd',
-    fontSize: 16,
-  },
-  adSpace: {
-    height: 60,
-  },
-  tabBar: {
-    flexDirection: 'row',
-    borderTopWidth: 1,
-    borderTopColor: '#1a1a1a',
-    paddingVertical: 10,
-    paddingBottom: 20,
-  },
-  tabItem: {
-    flex: 1,
-    alignItems: 'center',
-  },
-  tabIcon: {
-    fontSize: 22,
-    color: '#777',
-  },
-  tabLabel: {
-    fontSize: 11,
-    color: '#777',
-    marginTop: 2,
-  },
-  tabActive: {
-    color: '#fff',
-  },
-  tabContent: {
-    flex: 1,
-  },
-  sectionTitle: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '600',
-    marginBottom: 14,
-  },
-  emptyText: {
-    color: '#666',
-    fontSize: 14,
-    textAlign: 'center',
-    marginTop: 40,
-  },
-  historyRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 12,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1a1a1a',
-  },
-  historyDate: {
-    color: '#ccc',
-    fontSize: 15,
-  },
-  historyDuration: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
-  },
-  historyStatus: {
-    fontSize: 13,
-    marginTop: 4,
-  },
-  historyReached: {
-    color: '#4CAF50',
-  },
-  historyNotReached: {
-    color: '#999',
-  },
-  historyDim: {
-    color: '#999',
-  },
-  statsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-around',
-    marginBottom: 10,
-  },
-  statsRowItem: {
-    alignItems: 'center',
-  },
-  statsRowValue: {
-    color: '#fff',
-    fontSize: 17,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'],
-  },
-  statsRowLabel: {
-    color: '#aaa',
-    fontSize: 10,
-    marginTop: 2,
-    textTransform: 'uppercase',
-    letterSpacing: 0.5,
-  },
-  settingsLabel: {
-    color: '#ccc',
-    fontSize: 14,
-    textTransform: 'uppercase',
-    letterSpacing: 1,
-    marginBottom: 12,
-  },
-  goalOptions: {
-    flexDirection: 'row',
-    flexWrap: 'wrap',
-    gap: 8,
-  },
-  goalOption: {
-    borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 18,
-  },
-  goalOptionActive: {
-    borderColor: '#4CAF50',
-    backgroundColor: '#1a2e1a',
-  },
-  goalOptionText: {
-    color: '#ccc',
-    fontSize: 16,
-  },
-  goalOptionTextActive: {
-    color: '#4CAF50',
-  },
-  settingsDivider: {
-    height: 1,
-    backgroundColor: '#1a1a1a',
-    marginVertical: 16,
-  },
-  settingsInfoRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    paddingVertical: 14,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1a1a1a',
-  },
-  settingsInfoLabel: {
-    color: '#ccc',
-    fontSize: 16,
-  },
-  settingsInfoValue: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-  },
-  settingsToggleRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 8,
-  },
-  settingsRow: {
-    flexDirection: 'row',
-    justifyContent: 'space-between',
-    alignItems: 'center',
-    paddingVertical: 16,
-    borderBottomWidth: 1,
-    borderBottomColor: '#1a1a1a',
-  },
-  settingsRowText: {
-    color: '#ccc',
-    fontSize: 16,
-  },
-  settingsRowArrow: {
-    color: '#777',
-    fontSize: 22,
-  },
-  versionText: {
-    color: '#444',
-    fontSize: 13,
-    textAlign: 'center',
-    marginTop: 32,
-    marginBottom: 40,
-  },
-  howToStep: {
-    color: '#ccc',
-    fontSize: 15,
-    lineHeight: 24,
-  },
-  comparisonRow: {
-    flexDirection: 'row',
-    gap: 12,
-  },
-  comparisonColumn: {
-    flex: 1,
-  },
-  comparisonHeader: {
-    color: '#fff',
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  comparisonHeaderPro: {
-    color: '#4CAF50',
-    fontSize: 16,
-    fontWeight: '600',
-    marginBottom: 8,
-  },
-  comparisonItem: {
-    color: '#999',
-    fontSize: 14,
-    lineHeight: 22,
-  },
-  comparisonItemPro: {
-    color: '#ccc',
-    fontSize: 14,
-    lineHeight: 22,
-  },
-  adLink: {
-    alignItems: 'center',
-    paddingVertical: 6,
-  },
-  adLinkText: {
-    color: '#888',
-    fontSize: 13,
-    textAlign: 'center',
-    lineHeight: 18,
-  },
-  chartOverlay: {
-    position: 'absolute',
-    top: 0,
-    left: 0,
-    right: 0,
-    bottom: 0,
-    justifyContent: 'center',
-    alignItems: 'center',
-    backgroundColor: 'rgba(0,0,0,0.5)',
-    borderRadius: 8,
-  },
-  chartPopup: {
-    backgroundColor: '#1a1a1a',
-    borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 10,
-    paddingVertical: 14,
-    paddingHorizontal: 20,
-    alignItems: 'center',
-    minWidth: 160,
-  },
-  chartPopupTime: {
-    color: '#fff',
-    fontSize: 15,
-    fontVariant: ['tabular-nums'] as any,
-  },
-  chartPopupArrow: {
-    color: '#555',
-    fontSize: 14,
-    marginVertical: 2,
-  },
-  chartPopupDuration: {
-    color: '#fff',
-    fontSize: 22,
-    fontWeight: '600',
-    fontVariant: ['tabular-nums'] as any,
-    marginBottom: 4,
-  },
-  chartPopupStatus: {
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  upgradeBlock: {
-    borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 8,
-    paddingVertical: 14,
-    alignItems: 'center',
-    marginTop: 16,
-    marginBottom: 20,
-  },
-  upgradeText: {
-    color: '#aaa',
-    fontSize: 15,
-  },
-  proDisabledLabel: {
-    color: '#555',
-  },
-  proDisabledInput: {
-    opacity: 0.4,
-  },
-  customInputRow: {
-    flexDirection: 'row',
-    alignItems: 'center',
-    gap: 6,
-  },
-  customInput: {
-    flex: 1,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 6,
-    color: '#fff',
-    fontSize: 15,
-    paddingHorizontal: 12,
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  customHHMMInput: {
-    width: 48,
-    backgroundColor: '#1a1a1a',
-    borderRadius: 6,
-    color: '#fff',
-    fontSize: 15,
-    textAlign: 'center',
-    paddingVertical: 8,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  customHHMMLabel: {
-    color: '#999',
-    fontSize: 14,
-    alignSelf: 'center',
-  },
-  customClearBtn: {
-    backgroundColor: '#2a1a1a',
-    borderRadius: 6,
-    width: 32,
-    height: 32,
-    justifyContent: 'center',
-    alignItems: 'center',
-  },
-  customClearBtnText: {
-    color: '#e53935',
-    fontSize: 14,
-    fontWeight: '600',
-  },
-  customInputBtn: {
-    backgroundColor: '#1a2e1a',
-    borderRadius: 6,
-    paddingHorizontal: 16,
-    justifyContent: 'center',
-  },
-  customInputBtnText: {
-    color: '#4CAF50',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-  historyNote: {
-    color: '#999',
-    fontSize: 13,
-    marginTop: 4,
-  },
-  editButton: {
-    backgroundColor: '#1a2e1a',
-    borderRadius: 6,
-    paddingVertical: 6,
-    paddingHorizontal: 14,
-    marginTop: 6,
-  },
-  editButtonText: {
-    color: '#4CAF50',
-    fontSize: 13,
-    fontWeight: '600',
-  },
-  historyPhoto: {
-    width: 40,
-    height: 40,
-    borderRadius: 4,
-    marginTop: 6,
-  },
-  modalOverlay: {
-    flex: 1,
-    backgroundColor: 'rgba(0,0,0,0.8)',
-    justifyContent: 'center',
-    paddingHorizontal: 24,
-  },
-  modalContent: {
-    backgroundColor: '#111',
-    borderRadius: 10,
-    padding: 20,
-  },
-  modalTitle: {
-    color: '#fff',
-    fontSize: 18,
-    fontWeight: '600',
-    marginBottom: 16,
-  },
-  modalLabel: {
-    color: '#aaa',
-    fontSize: 13,
-    marginBottom: 6,
-    marginTop: 12,
-  },
-  modalDisabled: {
-    color: '#555',
-  },
-  modalInput: {
-    backgroundColor: '#1a1a1a',
-    borderRadius: 6,
-    color: '#fff',
-    fontSize: 14,
-    paddingHorizontal: 12,
-    paddingVertical: 10,
-    borderWidth: 1,
-    borderColor: '#333',
-  },
-  modalInputDisabled: {
-    opacity: 0.4,
-  },
-  modalPhotoPreview: {
-    width: 80,
-    height: 80,
-    borderRadius: 6,
-    marginTop: 4,
-  },
-  modalPhotoButton: {
-    borderWidth: 1,
-    borderColor: '#333',
-    borderRadius: 6,
-    paddingVertical: 10,
-    alignItems: 'center' as const,
-  },
-  modalPhotoButtonText: {
-    color: '#aaa',
-    fontSize: 14,
-  },
-  modalButtons: {
-    flexDirection: 'row' as const,
-    alignItems: 'center' as const,
-    gap: 12,
-    marginTop: 20,
-  },
-  modalDelete: {
-    paddingVertical: 10,
-    paddingHorizontal: 16,
-  },
-  modalDeleteText: {
-    color: '#ff4444',
-    fontSize: 14,
-  },
-  modalCancel: {
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-  },
-  modalCancelText: {
-    color: '#888',
-    fontSize: 15,
-  },
-  modalConfirm: {
-    backgroundColor: '#1a2e1a',
-    borderRadius: 6,
-    paddingVertical: 10,
-    paddingHorizontal: 20,
-  },
-  modalConfirmText: {
-    color: '#4CAF50',
-    fontSize: 15,
-    fontWeight: '600',
-  },
-});
