@@ -98,58 +98,17 @@ export type ReminderSpec = {
 };
 
 export async function rescheduleAll(
-  lastMealTimestamp: number,
-  goalHours: number,
-  goalAlertEnabled: boolean,
-  goalStrong: boolean,
-  reminders: [ReminderSpec, ReminderSpec, ReminderSpec],
-  isPro: boolean,
-  soundUri?: string,
+  _lastMealTimestamp: number,
+  _goalHours: number,
+  _goalAlertEnabled: boolean,
+  _goalStrong: boolean,
+  _reminders: [ReminderSpec, ReminderSpec, ReminderSpec],
+  _isPro: boolean,
+  _soundUri?: string,
 ): Promise<void> {
-  const permission = await notifee.requestPermission();
-  if (permission.authorizationStatus < 1) return;
-
+  await notifee.requestPermission();
   for (const id of ALL_IDS) {
     await notifee.cancelNotification(id);
-  }
-
-  const goalTime = lastMealTimestamp + goalHours * 3600000;
-
-  if (goalAlertEnabled && goalTime > Date.now()) {
-    const goalH = goalHours % 1 === 0
-      ? `${goalHours}h`
-      : `${Math.floor(goalHours)}h${Math.round((goalHours % 1) * 60)}m`;
-    await scheduleNotification(
-      NOTIF_ID_GOAL,
-      goalTime,
-      'Goal reached!',
-      `${goalH} fasting goal reached.`,
-      isPro && goalStrong,
-      soundUri,
-    );
-  }
-
-  if (isPro) {
-    const ids = [NOTIF_ID_REMINDER_1, NOTIF_ID_REMINDER_2, NOTIF_ID_REMINDER_3];
-    for (let i = 0; i < 3; i++) {
-      const r = reminders[i];
-      if (!r.enabled || r.offsetMinutes <= 0) continue;
-      const fireDate = goalTime - r.offsetMinutes * 60000;
-      if (fireDate <= Date.now()) continue;
-      const oh = Math.floor(r.offsetMinutes / 60);
-      const om = r.offsetMinutes % 60;
-      const offsetStr = oh > 0
-        ? om > 0 ? `${oh}h ${om}m` : `${oh}h`
-        : `${om}m`;
-      await scheduleNotification(
-        ids[i],
-        fireDate,
-        'Fasting reminder',
-        `${offsetStr} until fasting goal.`,
-        r.strong,
-        soundUri,
-      );
-    }
   }
 }
 

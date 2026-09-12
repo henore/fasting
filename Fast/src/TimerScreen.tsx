@@ -14,6 +14,8 @@ import {
   TextInput,
   Image,
   NativeModules,
+  PermissionsAndroid,
+  Platform,
   type AppStateStatus,
 } from 'react-native';
 import {launchImageLibrary} from 'react-native-image-picker';
@@ -49,7 +51,6 @@ import {
 } from './storage';
 import {
   rescheduleAll,
-  cancelAll,
   cancelAllDisplayed,
 } from './notifications';
 
@@ -245,6 +246,26 @@ export default function TimerScreen() {
       hhMM(r3, setRem3HH, setRem3MM);
       setLoaded(true);
 
+      if (Platform.OS === 'android' && Platform.Version >= 33) {
+        await PermissionsAndroid.request(PermissionsAndroid.PERMISSIONS.POST_NOTIFICATIONS);
+      }
+
+      if (Platform.OS === 'android' && Platform.Version >= 34) {
+        try {
+          const canFSI = await WidgetDataModule.canUseFullScreenIntent();
+          if (!canFSI) {
+            Alert.alert(
+              'Full Screen Alarm',
+              'To show alarms when the screen is off, please enable "Full screen notifications" for this app.',
+              [
+                {text: 'Later', style: 'cancel'},
+                {text: 'Open Settings', onPress: () => WidgetDataModule.openFullScreenIntentSettings()},
+              ],
+            );
+          }
+        } catch {}
+      }
+
       const timerSeen = await getOverlaySeen('timer');
       if (!timerSeen) {
         setOverlayVisible(prev => ({...prev, timer: true}));
@@ -282,7 +303,7 @@ export default function TimerScreen() {
     if (proExpiresAt > 0 && proExpiresAt <= Date.now()) {
       setShowProExpired(true);
     }
-  }, [loaded, proPermanent, proExpiresAt, now]);
+  }, [loaded, proPermanent, proExpiresAt]);
 
   useEffect(() => {
     if (mealModalVisible || editModalVisible) {
@@ -386,8 +407,6 @@ export default function TimerScreen() {
     setLastMeal(endTs);
     setNow(Date.now());
     WidgetDataModule.update(endTs, goalHours);
-
-    await cancelAll();
   }, [lastMeal, bestMinutes, goalHours, completedFasts, proExpiresAt, proPermanent, mealNote, mealPhotoUri]);
 
   const handlePickPhoto = useCallback(async () => {
@@ -1133,18 +1152,28 @@ export default function TimerScreen() {
         />
       </View>
       {goalAlertEnabled && (
-        <View style={styles.settingsToggleRow}>
-          <Text style={[styles.settingsInfoLabel, !isPro && styles.proDisabledLabel]}>
-            Strong {!isPro && '(Pro)'}
-          </Text>
-          <Switch
-            value={goalStrong}
-            onValueChange={isPro ? (v) => handleGoalStrongToggle(v) : undefined}
-            disabled={!isPro}
-            trackColor={{false: '#333', true: '#2e7d32'}}
-            thumbColor={goalStrong ? '#4CAF50' : '#666'}
-          />
-        </View>
+        <>
+          <View style={styles.settingsToggleRow}>
+            <Text style={[styles.settingsInfoLabel, !isPro && styles.proDisabledLabel]}>
+              Strong Alert (Alarm) {!isPro && '(Pro)'}
+            </Text>
+            <Switch
+              value={goalStrong}
+              onValueChange={isPro ? (v) => handleGoalStrongToggle(v) : undefined}
+              disabled={!isPro}
+              trackColor={{false: '#333', true: '#2e7d32'}}
+              thumbColor={goalStrong ? '#4CAF50' : '#666'}
+            />
+          </View>
+          {goalStrong && isPro && (
+            <Pressable onPress={handlePickAlarmSound} style={styles.settingsRow}>
+              <Text style={styles.settingsRowText}>Alarm Sound</Text>
+              <Text style={{color: '#aaa', fontSize: 14}}>
+                {strongSoundName ?? 'Default alarm'}
+              </Text>
+            </Pressable>
+          )}
+        </>
       )}
 
       {([1, 2, 3] as const).map(n => {
@@ -1198,34 +1227,32 @@ export default function TimerScreen() {
               )}
             </View>
             {rem.offsetMinutes > 0 && (
-              <View style={styles.settingsToggleRow}>
-                <Text style={[styles.settingsInfoLabel, !isPro && styles.proDisabledLabel]}>
-                  Strong
-                </Text>
-                <Switch
-                  value={rem.strong}
-                  onValueChange={isPro ? (v) => handleReminderStrongToggle(n, v) : undefined}
-                  disabled={!isPro}
-                  trackColor={{false: '#333', true: '#2e7d32'}}
-                  thumbColor={rem.strong ? '#4CAF50' : '#666'}
-                />
-              </View>
+              <>
+                <View style={styles.settingsToggleRow}>
+                  <Text style={[styles.settingsInfoLabel, !isPro && styles.proDisabledLabel]}>
+                    Strong Alert (Alarm)
+                  </Text>
+                  <Switch
+                    value={rem.strong}
+                    onValueChange={isPro ? (v) => handleReminderStrongToggle(n, v) : undefined}
+                    disabled={!isPro}
+                    trackColor={{false: '#333', true: '#2e7d32'}}
+                    thumbColor={rem.strong ? '#4CAF50' : '#666'}
+                  />
+                </View>
+                {rem.strong && isPro && (
+                  <Pressable onPress={handlePickAlarmSound} style={styles.settingsRow}>
+                    <Text style={styles.settingsRowText}>Alarm Sound</Text>
+                    <Text style={{color: '#aaa', fontSize: 14}}>
+                      {strongSoundName ?? 'Default alarm'}
+                    </Text>
+                  </Pressable>
+                )}
+              </>
             )}
           </View>
         );
       })}
-
-      {isPro && (goalStrong || rem1.strong || rem2.strong || rem3.strong) && (
-        <>
-          <Text style={[styles.settingsLabel, {marginTop: 16}]}>Alarm Sound</Text>
-          <Pressable onPress={handlePickAlarmSound} style={styles.settingsRow}>
-            <Text style={styles.settingsRowText}>Sound</Text>
-            <Text style={{color: '#aaa', fontSize: 14}}>
-              {strongSoundName ?? 'Default alarm'}
-            </Text>
-          </Pressable>
-        </>
-      )}
 
       <View style={styles.settingsDivider} />
 
@@ -1348,7 +1375,7 @@ export default function TimerScreen() {
               Pro Trial Ended
             </Text>
             <Text style={styles.tutorialText}>
-              Your 48-hour Pro trial has expired.
+              Your 20-day Pro trial has expired.
             </Text>
             <Text style={styles.tutorialText}>
               You can upgrade anytime from Settings.

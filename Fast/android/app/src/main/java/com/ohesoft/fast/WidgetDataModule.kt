@@ -1,9 +1,14 @@
 package com.ohesoft.fast
 
+import android.app.NotificationManager
 import android.content.Context
+import android.content.Intent
+import android.os.Build
+import android.provider.Settings
 import com.facebook.react.bridge.ReactApplicationContext
 import com.facebook.react.bridge.ReactContextBaseJavaModule
 import com.facebook.react.bridge.ReactMethod
+import com.facebook.react.bridge.Promise
 import com.facebook.react.module.annotations.ReactModule
 
 @ReactModule(name = WidgetDataModule.NAME)
@@ -20,6 +25,7 @@ class WidgetDataModule(reactContext: ReactApplicationContext) :
             .putFloat("goal_hours", goalHours.toFloat())
             .apply()
         FastWidgetProvider.updateAllWidgets(reactApplicationContext)
+        AlarmScheduler.rescheduleAll(reactApplicationContext)
     }
 
     @ReactMethod
@@ -52,6 +58,39 @@ class WidgetDataModule(reactContext: ReactApplicationContext) :
             .putBoolean("rem3_strong", rem3Strong)
             .putString("strong_sound_uri", strongSoundUri)
             .apply()
+        AlarmScheduler.rescheduleAll(reactApplicationContext)
+    }
+
+    @ReactMethod
+    fun canUseFullScreenIntent(promise: Promise) {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val nm = reactApplicationContext.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
+            promise.resolve(nm.canUseFullScreenIntent())
+        } else {
+            promise.resolve(true)
+        }
+    }
+
+    @ReactMethod
+    fun openFullScreenIntentSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.UPSIDE_DOWN_CAKE) {
+            val intent = Intent(Settings.ACTION_MANAGE_APP_USE_FULL_SCREEN_INTENT).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, reactApplicationContext.packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactApplicationContext.startActivity(intent)
+        }
+    }
+
+    @ReactMethod
+    fun openExactAlarmSettings() {
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S) {
+            val intent = Intent(Settings.ACTION_REQUEST_SCHEDULE_EXACT_ALARM).apply {
+                putExtra(Settings.EXTRA_APP_PACKAGE, reactApplicationContext.packageName)
+                addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+            }
+            reactApplicationContext.startActivity(intent)
+        }
     }
 
     companion object {

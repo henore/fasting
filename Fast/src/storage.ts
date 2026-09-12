@@ -110,7 +110,7 @@ export async function startProTrial(): Promise<number> {
   if (existing && Number(existing) > 0) {
     return Number(existing);
   }
-  const expires = Date.now() + 48 * 60 * 60 * 1000;
+  const expires = Date.now() + 20 * 24 * 60 * 60 * 1000;
   await AsyncStorage.setItem(KEYS.PRO_EXPIRES_AT, String(expires));
   return expires;
 }

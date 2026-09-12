@@ -11,7 +11,7 @@ import android.os.Build
 object AlarmScheduler {
 
     private const val CHANNEL_NORMAL = "fasting"
-    private const val CHANNEL_STRONG = "fasting-strong-alert"
+    private const val CHANNEL_STRONG = "fasting-strong-alert-v2"
     private const val REQ_GOAL = 1001
     private const val REQ_CUSTOM1 = 1002
     private const val REQ_CUSTOM2 = 1003
@@ -27,11 +27,16 @@ object AlarmScheduler {
         val goalStrong = prefs.getBoolean("goal_strong", false)
         val strongSoundUri = prefs.getString("strong_sound_uri", null)
 
-        ensureChannels(context)
+        ensureChannels(context, strongSoundUri)
 
         val am = context.getSystemService(Context.ALARM_SERVICE) as AlarmManager
         val now = System.currentTimeMillis()
         val goalTime = lastMeal + (goalHours * 3600000).toLong()
+
+        cancelAlarm(context, am, REQ_GOAL)
+        cancelAlarm(context, am, REQ_CUSTOM1)
+        cancelAlarm(context, am, REQ_CUSTOM2)
+        cancelAlarm(context, am, REQ_CUSTOM3)
 
         if (goalAlertEnabled && goalTime > now) {
             val goalH = if (goalHours % 1 == 0f) "${goalHours.toInt()}h" else "${goalHours.toInt()}h${Math.round((goalHours % 1) * 60)}m"
@@ -79,10 +84,26 @@ object AlarmScheduler {
             context, reqCode, intent,
             PendingIntent.FLAG_UPDATE_CURRENT or PendingIntent.FLAG_IMMUTABLE
         )
-        am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, pi)
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.S && !am.canScheduleExactAlarms()) {
+            am.setAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, pi)
+        } else {
+            am.setExactAndAllowWhileIdle(AlarmManager.RTC_WAKEUP, time, pi)
+        }
     }
 
-    private fun ensureChannels(context: Context) {
+    private fun cancelAlarm(context: Context, am: AlarmManager, reqCode: Int) {
+        val intent = Intent(context, AlarmReceiver::class.java)
+        val pi = PendingIntent.getBroadcast(
+            context, reqCode, intent,
+            PendingIntent.FLAG_NO_CREATE or PendingIntent.FLAG_IMMUTABLE
+        )
+        if (pi != null) {
+            am.cancel(pi)
+            pi.cancel()
+        }
+    }
+
+    private fun ensureChannels(context: Context, soundUri: String? = null) {
         if (Build.VERSION.SDK_INT < Build.VERSION_CODES.O) return
         val nm = context.getSystemService(Context.NOTIFICATION_SERVICE) as NotificationManager
 
@@ -94,6 +115,13 @@ object AlarmScheduler {
             NotificationManager.IMPORTANCE_HIGH).apply {
             enableVibration(true)
             vibrationPattern = longArrayOf(0, 500, 200, 500, 200, 500)
+            if (soundUri != null) {
+                setSound(android.net.Uri.parse(soundUri),
+                    android.media.AudioAttributes.Builder()
+                        .setUsage(android.media.AudioAttributes.USAGE_ALARM)
+                        .setContentType(android.media.AudioAttributes.CONTENT_TYPE_SONIFICATION)
+                        .build())
+            }
         }
         nm.createNotificationChannel(strong)
     }
